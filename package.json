@@ -1,0 +1,21 @@
+{
+  "name": "user_tracking",
+  "version": "1.0.0",
+  "description": "1. Open Chrome and navigate to the extensions page by entering `chrome://extensions` in the address bar and pressing **Enter**.\r 2. Enable Developer Mode:\r    - Toggle **Developer mode** on (located in the top-right corner of the extensions page).\r 3. Click `Load unpacked`:\r    - A button labeled **\"Load unpacked\"** will appear. Click it.\r 4. Select the Extension Folder:\r    - In the file browser that opens, navigate to the folder containing your unpackaged extension files (including the `manifest.json` file).\r    - Select the folder and click **Open**.\r 5. Verify Installation:\r    - The extension will appear in the list of installed extensions.\r    - Ensure that it is enabled (toggle the switch to \"on\" if needed).",
+  "main": "background.js",
+  "scripts": {
+    "build": "webpack",
+    "start": "webpack serve --open"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@babel/core": "^7.26.9",
+    "@babel/preset-env": "^7.26.9",
+    "babel-loader": "^9.2.1",
+    "webpack": "^5.98.0",
+    "webpack-cli": "^6.0.1"
+  }
+}
