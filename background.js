@@ -45,51 +45,34 @@ function exportRecording() {
       return;
     }
 
-    let blob;
     try {
-      blob = new Blob([json], { type: 'application/json' });
-    } catch (err) {
-      console.error('Error creating Blob:', err);
-      return;
-    }
-
-    let url;
-    try {
-      // Use globalThis to ensure compatibility in the service worker context.
-      url = globalThis.URL.createObjectURL(blob);
-    } catch (err) {
-      console.error('Failed to create Object URL for the blob:', err);
-      return;
-    }
-
-    if (!url) {
-      console.error('Failed to create Object URL for the blob.');
-      return;
-    }
-
-    chrome.downloads.download({
-      url: url,
-      filename: `recording-${Date.now()}.json`,
-      conflictAction: 'uniquify'
-    }, (downloadId) => {
-      if (chrome.runtime.lastError) {
-        console.error('Download error:', chrome.runtime.lastError.message);
-      } else {
-        console.log('Download started with ID:', downloadId);
-      }
-      setTimeout(() => {
-        globalThis.URL.revokeObjectURL(url);
-        console.log('Object URL revoked.');
-      }, 5000);
-      
-      chrome.storage.local.set({ records: [], initialDomSnapshot: '', domMutations: [] }, () => {
+      const base64Data = btoa(json);  // Convert JSON string to Base64
+      const dataUrl = `data:application/json;base64,${base64Data}`;
+    
+      chrome.downloads.download({
+        url: dataUrl,
+        filename: `recording-${Date.now()}.json`,
+        conflictAction: 'uniquify'
+      }, (downloadId) => {
         if (chrome.runtime.lastError) {
-          console.error('Error clearing storage:', chrome.runtime.lastError.message);
+          console.error('Download error:', chrome.runtime.lastError.message);
         } else {
-          console.log('Storage cleared.');
+          console.log('Download started with ID:', downloadId);
         }
+    
+        // No need to revoke anything for a data URL, but you can clear
+        // chrome.storage or do any other cleanup here
+        chrome.storage.local.set({ records: [], initialDomSnapshot: '', domMutations: [] }, () => {
+          if (chrome.runtime.lastError) {
+            console.error('Error clearing storage:', chrome.runtime.lastError.message);
+          } else {
+            console.log('Storage cleared.');
+          }
+        });
       });
-    });
+    } catch (err) {
+      console.error('Failed to create data URL:', err);
+    }
   });
 }
 
@@ -139,52 +122,71 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.commands.onCommand.addListener((command) => {
-  if (command === "toggle-recording") {
-    recording = !recording;
-    console.log(`Recording ${recording ? "started" : "stopped"}.`);
+  if (command !== "toggle-recording") return;
 
+  chrome.storage.local.get({ recording: false }, (result) => {
+    const wasRecording = result.recording;
+    const nowRecording = !wasRecording;
+
+    console.log(`Recording ${nowRecording ? "started" : "stopped"}.`);
+
+    // Persist the new state
+    chrome.storage.local.set({ recording: nowRecording }, () => {
+      if (chrome.runtime.lastError) {
+        console.error("Error updating recording state:", chrome.runtime.lastError.message);
+      }
+    });
+
+    // Show notification
     showNotification(
-      recording ? "Recording Started" : "Recording Stopped",
-      recording ? "User interaction recording has started." : "User interaction recording has stopped."
+      nowRecording ? "Recording Started" : "Recording Stopped",
+      nowRecording
+        ? "User interaction recording has started."
+        : "User interaction recording has stopped."
     );
 
+    // Query the active tab
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (chrome.runtime.lastError) {
         console.error('Error querying tabs:', chrome.runtime.lastError.message);
         return;
       }
-      if (tabs.length && tabs[0].id) {
-        console.log("Active tab URL:", tabs[0].url);
-        // Delay a little to allow content script readiness
-        setTimeout(() => {
-          chrome.tabs.sendMessage(tabs[0].id, { action: recording ? "start" : "stop" }, (response) => {
-            if (chrome.runtime.lastError) {
-              console.error('Error sending message to content script:', chrome.runtime.lastError.message);
-              // Attempt to inject the content script, then retry
-              injectContentScript(tabs[0].id, () => {
-                // Retry after a short delay
-                setTimeout(() => {
-                  chrome.tabs.sendMessage(tabs[0].id, { action: recording ? "start" : "stop" }, (retryResponse) => {
-                    if (chrome.runtime.lastError) {
-                      console.error('Retry error sending message:', chrome.runtime.lastError.message);
-                    } else {
-                      console.log('Message sent to content script after injection, response:', retryResponse);
-                    }
-                  });
-                }, 300);
-              });
-            } else {
-              console.log('Message sent to content script, response:', response);
-            }
-          });
-        }, 300);
-      } else {
-        console.warn('No active tab found.');
-      }
-    });
 
-    if (!recording) {
-      exportRecording();
-    }
-  }
+      if (!tabs.length || !tabs[0].id) {
+        console.warn('No active tab found.');
+        return;
+      }
+
+      const tabId = tabs[0].id;
+      const action = nowRecording ? "start" : "stop";
+
+      // Always inject content script (only needed if you do NOT auto-declare it in manifest.json)
+      // If you declare your content script in "content_scripts" in the manifest,
+      // you could skip injection or at least skip for "stop".
+      chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["dist/main.js"], 
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error("Error injecting content script:", chrome.runtime.lastError.message);
+          return;
+        }
+        console.log("Content script injected (or already present).");
+
+        // Now send "start"/"stop" to the content script
+        chrome.tabs.sendMessage(tabId, { action }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.error("Error sending message:", chrome.runtime.lastError.message);
+          } else {
+            console.log(`Message '${action}' sent. Response:`, response);
+          }
+
+          // If we're stopping, export
+          if (!nowRecording) {
+            exportRecording();
+          }
+        });
+      });
+    });
+  });
 });
