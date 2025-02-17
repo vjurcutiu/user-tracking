@@ -19,6 +19,15 @@ function showNotification(title, message) {
   });
 }
 
+function b64EncodeUnicode(str) {
+  return btoa(
+    encodeURIComponent(str).replace(
+      /%([0-9A-F]{2})/g,
+      (match, p1) => String.fromCharCode('0x' + p1)
+    )
+  );
+}
+
 function exportRecording() {
   // Retrieve stored interaction data, initial DOM snapshot, and DOM mutations
   chrome.storage.local.get({ 
@@ -46,7 +55,7 @@ function exportRecording() {
     }
 
     try {
-      const base64Data = btoa(json);  // Convert JSON string to Base64
+      const base64Data = b64EncodeUnicode(json);  
       const dataUrl = `data:application/json;base64,${base64Data}`;
     
       chrome.downloads.download({
