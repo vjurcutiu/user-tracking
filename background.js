@@ -19,6 +19,7 @@ function showNotification(title, message) {
   });
 }
 
+// Helper to handle UTF-8 safely in base64
 function b64EncodeUnicode(str) {
   return btoa(
     encodeURIComponent(str).replace(
@@ -28,39 +29,37 @@ function b64EncodeUnicode(str) {
   );
 }
 
+/**
+ * Export the rrweb events to a JSON file using a data URL.
+ * This function is called when the user stops recording.
+ */
 function exportRecording() {
-  // Retrieve stored interaction data, initial DOM snapshot, and DOM mutations
-  chrome.storage.local.get({ 
-    records: [], 
-    initialDomSnapshot: '', 
-    domMutations: [] 
-  }, (result) => {
+  // Retrieve rrwebEvents from storage
+  chrome.storage.local.get({ rrwebEvents: [] }, (result) => {
     if (chrome.runtime.lastError) {
-      console.error('Error retrieving storage data:', chrome.runtime.lastError.message);
+      console.error('Error retrieving rrweb events:', chrome.runtime.lastError.message);
       return;
     }
     
-    const exportData = {
-      interactions: result.records,
-      initialDomSnapshot: result.initialDomSnapshot,
-      domMutations: result.domMutations
-    };
-
+    const rrwebData = result.rrwebEvents || [];
     let json;
     try {
-      json = JSON.stringify(exportData, null, 2);
+      // Convert events array to JSON
+      json = JSON.stringify(rrwebData, null, 2);
     } catch (err) {
-      console.error('Error stringifying export data:', err);
+      console.error('Error stringifying rrweb events:', err);
       return;
     }
 
+    // Base64-encode the JSON for a data URL
     try {
       const base64Data = b64EncodeUnicode(json);  
       const dataUrl = `data:application/json;base64,${base64Data}`;
     
+      // Use the chrome.downloads API to save the file
       chrome.downloads.download({
         url: dataUrl,
-        filename: `recording-${Date.now()}.json`,
+        filename: `rrweb-recording-${Date.now()}.json`,
         conflictAction: 'uniquify'
       }, (downloadId) => {
         if (chrome.runtime.lastError) {
@@ -68,14 +67,13 @@ function exportRecording() {
         } else {
           console.log('Download started with ID:', downloadId);
         }
-    
-        // No need to revoke anything for a data URL, but you can clear
-        // chrome.storage or do any other cleanup here
-        chrome.storage.local.set({ records: [], initialDomSnapshot: '', domMutations: [] }, () => {
+
+        // Optionally clear rrwebEvents after exporting
+        chrome.storage.local.set({ rrwebEvents: [] }, () => {
           if (chrome.runtime.lastError) {
-            console.error('Error clearing storage:', chrome.runtime.lastError.message);
+            console.error('Error clearing rrwebEvents:', chrome.runtime.lastError.message);
           } else {
-            console.log('Storage cleared.');
+            console.log('rrweb events cleared from storage.');
           }
         });
       });
@@ -85,10 +83,15 @@ function exportRecording() {
   });
 }
 
+/**
+ * Dynamically injects the content script if it’s not in your manifest.json
+ * "content_scripts" section. If you declared it in your manifest, you can skip
+ * or simplify this.
+ */
 function injectContentScript(tabId, callback) {
   chrome.scripting.executeScript({
     target: { tabId: tabId },
-    files: ['content.js']  // Ensure this path is correct relative to your manifest
+    files: ['dist/main.js']  // Make sure the path is correct for your bundle
   }, () => {
     if (chrome.runtime.lastError) {
       console.error('Error injecting content script:', chrome.runtime.lastError.message);
@@ -99,62 +102,52 @@ function injectContentScript(tabId, callback) {
   });
 }
 
+/**
+ * Listen for messages from the content script. 
+ * - “contentScriptReady” means the content script is injected and ready.
+ * 
+ * Because we’re using rrweb, we typically won’t see “interactionData” here—rrweb handles all events internally.
+ */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "contentScriptReady") {
     console.log("Content script reported ready from tab:", sender.tab?.id);
     sendResponse({ status: "ready" });
-    return; // Prevent further processing in this listener
+    return; // No further processing needed.
   }
-
-  if (message.interactionData) {
-    const { interactionData, domSnapshot } = message;
-    console.log('Interaction:', interactionData);
-    console.log('DOM Snapshot:', domSnapshot);
-
-    chrome.storage.local.get({ records: [] }, (result) => {
-      if (chrome.runtime.lastError) {
-        console.error('Error retrieving records:', chrome.runtime.lastError.message);
-        return;
-      }
-      const records = result.records;
-      records.push({ interactionData, domSnapshot });
-      chrome.storage.local.set({ records }, () => {
-        if (chrome.runtime.lastError) {
-          console.error('Error saving records:', chrome.runtime.lastError.message);
-        } else {
-          console.log('Record saved successfully.');
-        }
-      });
-    });
-    sendResponse({ status: 'success' });
-  }
+  // If you previously handled custom interactionData, you can remove that code now,
+  // since rrweb automatically handles event capture in the content script.
 });
 
+/**
+ * Listen for the keyboard shortcut “Ctrl+Shift+Z” (defined in manifest commands),
+ * toggle the “start” or “stop” state, and notify the content script. 
+ */
 chrome.commands.onCommand.addListener((command) => {
   if (command !== "toggle-recording") return;
 
+  // Persist the "recording" state in chrome.storage
   chrome.storage.local.get({ recording: false }, (result) => {
     const wasRecording = result.recording;
     const nowRecording = !wasRecording;
 
     console.log(`Recording ${nowRecording ? "started" : "stopped"}.`);
 
-    // Persist the new state
+    // Update storage
     chrome.storage.local.set({ recording: nowRecording }, () => {
       if (chrome.runtime.lastError) {
         console.error("Error updating recording state:", chrome.runtime.lastError.message);
       }
     });
 
-    // Show notification
+    // Show a desktop notification
     showNotification(
       nowRecording ? "Recording Started" : "Recording Stopped",
       nowRecording
-        ? "User interaction recording has started."
-        : "User interaction recording has stopped."
+        ? "User interaction recording (rrweb) has started."
+        : "rrweb recording has stopped."
     );
 
-    // Query the active tab
+    // Find the active tab
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (chrome.runtime.lastError) {
         console.error('Error querying tabs:', chrome.runtime.lastError.message);
@@ -169,28 +162,17 @@ chrome.commands.onCommand.addListener((command) => {
       const tabId = tabs[0].id;
       const action = nowRecording ? "start" : "stop";
 
-      // Always inject content script (only needed if you do NOT auto-declare it in manifest.json)
-      // If you declare your content script in "content_scripts" in the manifest,
-      // you could skip injection or at least skip for "stop".
-      chrome.scripting.executeScript({
-        target: { tabId },
-        files: ["dist/main.js"], 
-      }, () => {
-        if (chrome.runtime.lastError) {
-          console.error("Error injecting content script:", chrome.runtime.lastError.message);
-          return;
-        }
-        console.log("Content script injected (or already present).");
-
-        // Now send "start"/"stop" to the content script
+      // Inject the content script if needed (or skip if declared in manifest).
+      injectContentScript(tabId, () => {
+        // After injection, send "start" or "stop" message
         chrome.tabs.sendMessage(tabId, { action }, (response) => {
           if (chrome.runtime.lastError) {
-            console.error("Error sending message:", chrome.runtime.lastError.message);
+            console.error("Error sending message to content script:", chrome.runtime.lastError.message);
           } else {
-            console.log(`Message '${action}' sent. Response:`, response);
+            console.log(`Message '${action}' sent. Content script response:`, response);
           }
 
-          // If we're stopping, export
+          // If we're stopping, export the recorded rrweb events
           if (!nowRecording) {
             exportRecording();
           }

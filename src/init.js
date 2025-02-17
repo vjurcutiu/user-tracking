@@ -1,34 +1,14 @@
-// content.js (modified)
+// content.js (rrweb version)
 
-import { debounce, throttle } from './utils.js';
-import {
-  handleUserInteraction,
-  handleMouseMove,
-  handleContextMenu,
-  handleResize,
-  handleFormSubmission
-} from './listeners.js';
-import {
-  captureInitialDomSnapshot,
-  startObservingDom,
-  stopObservingDom,
-  getDomMutations
-} from './domSnapshot.js';
+import { record } from 'rrweb'; 
+// Make sure rrweb is installed and bundled, or included as a script if not using a bundler.
 
 let currentUrl = window.location.href;
-
-// Store references for debounced/throttled functions so we can remove them later.
-let debouncedHandleInput;
-let debouncedHandleScroll;
-let throttledHandleMouseMove;
-let debouncedHandleResize;
-
-// Track whether we’re actively recording.
 let isRecording = false;
+let stopRecording = null; // Function returned by rrweb to stop recording
+let rrwebEvents = [];
 
-console.log("Content script loaded on:", window.location.href);
-
-// Monitor URL changes if you still want to track them in general
+// Optional: monitor URL changes, if you still want to log them separately
 function monitorUrlChanges() {
   const observer = new MutationObserver(() => {
     const newUrl = window.location.href;
@@ -40,111 +20,95 @@ function monitorUrlChanges() {
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
-export function attachListeners() {
-  // Only attach if we’re not already recording
-  if (isRecording) return;
-  isRecording = true;
-
-  debouncedHandleInput = debounce(handleUserInteraction, 300);
-  debouncedHandleScroll = debounce(handleUserInteraction, 500);
-  throttledHandleMouseMove = throttle(handleMouseMove, 200);
-  debouncedHandleResize = debounce(handleResize, 300);
-
-  document.addEventListener('click', handleUserInteraction);
-  document.addEventListener('input', debouncedHandleInput);
-  document.addEventListener('scroll', debouncedHandleScroll);
-  document.addEventListener('keydown', handleUserInteraction);
-  document.addEventListener('mousemove', throttledHandleMouseMove);
-  document.addEventListener('contextmenu', handleContextMenu);
-  window.addEventListener('resize', debouncedHandleResize);
-  document.addEventListener('submit', handleFormSubmission, true);
-
-  console.log('Event listeners attached.');
-}
-
-export function detachListeners() {
-  if (!isRecording) return;
-  isRecording = false;
-
-  document.removeEventListener('click', handleUserInteraction);
-  document.removeEventListener('input', debouncedHandleInput);
-  document.removeEventListener('scroll', debouncedHandleScroll);
-  document.removeEventListener('keydown', handleUserInteraction);
-  document.removeEventListener('mousemove', throttledHandleMouseMove);
-  document.removeEventListener('contextmenu', handleContextMenu);
-  window.removeEventListener('resize', debouncedHandleResize);
-  document.removeEventListener('submit', handleFormSubmission, true);
-
-  console.log('Event listeners detached.');
-}
-
-// Minimal initialization: we do NOT attach listeners or observe DOM here.
-// Instead, we wait for a "start" message from background.js
+// Called once the script loads or DOM is ready
 function initialize() {
-  console.log('Initializing content script...');
+  console.log('Initializing rrweb content script...');
   if (typeof chrome === 'undefined' || !chrome.runtime) {
     console.error('Extension context is unavailable. Aborting initialization.');
     return;
   }
 
-  // If you want to watch URL changes even when not recording, keep monitorUrlChanges():
+  // If you want to watch URL changes at all times (recording or not), keep this
   monitorUrlChanges();
 
   // Notify background that the content script is loaded/ready.
-  chrome.runtime.sendMessage({ action: "contentScriptReady" }, (response) => {
+  chrome.runtime.sendMessage({ action: 'contentScriptReady' }, (response) => {
     if (chrome.runtime.lastError) {
-      console.error("Error sending readiness message:", chrome.runtime.lastError.message);
+      console.error('Error sending readiness message:', chrome.runtime.lastError.message);
     } else {
-      console.log("Content script is ready. Background response:", response);
+      console.log('Content script is ready. Background response:', response);
     }
   });
 }
 
-// Run `initialize()` once the page is ready
+// Start rrweb recording
+function startRrwebRecording() {
+  if (isRecording) {
+    console.log('rrweb is already recording.'); 
+    return;
+  }
+  isRecording = true;
+
+  // Clear any old events
+  rrwebEvents = [];
+
+  // Begin capturing
+  stopRecording = record({
+    emit(event) {
+      rrwebEvents.push(event);
+    },
+    // Optionally configure rrweb (e.g., to record canvas, checkoutEveryNms, etc.)
+    // recordCanvas: true,
+    // checkoutEveryNms: 10_000,
+  });
+
+  console.log('rrweb recording started.');
+}
+
+// Stop rrweb recording
+function stopRrwebRecording() {
+  if (!isRecording || !stopRecording) {
+    console.log('rrweb is not currently recording.');
+    return;
+  }
+  isRecording = false;
+
+  // Stop capturing
+  stopRecording();
+  stopRecording = null;
+
+  console.log(`rrweb recording stopped. Captured ${rrwebEvents.length} events.`);
+
+  // If you like, store the events so the background can export them
+  chrome.storage.local.set({ rrwebEvents }, () => {
+    if (chrome.runtime.lastError) {
+      console.error('Error saving rrweb events:', chrome.runtime.lastError.message);
+    } else {
+      console.log('rrweb events saved to local storage.');
+    }
+  });
+}
+
+// Listen for "start"/"stop" from background.js
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'start') {
+    console.log('Received "start" in rrweb content script.');
+    startRrwebRecording();
+    sendResponse({ status: 'started' });
+  } else if (message.action === 'stop') {
+    console.log('Received "stop" in rrweb content script.');
+    stopRrwebRecording();
+    sendResponse({ status: 'stopped' });
+  }
+
+  // If you need to respond asynchronously, you could do: return true;
+});
+
+console.log('rrweb content script loaded on:', window.location.href);
+
+// Initialize once DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initialize);
 } else {
   initialize();
 }
-
-// Listen for "start"/"stop" from background.js
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === "start") {
-    console.log("Recording started (content script).");
-
-    // 1. Capture the DOM snapshot
-    const initialDomSnapshot = captureInitialDomSnapshot();
-    console.log('Initial DOM Snapshot captured.');
-    chrome.storage.local.set({ initialDomSnapshot }, () => {
-      if (chrome.runtime.lastError) {
-        console.error("Error storing initial DOM snapshot:", chrome.runtime.lastError.message);
-      }
-    });
-
-    // 2. Start observing DOM mutations
-    startObservingDom();
-
-    // 3. Attach listeners
-    attachListeners();
-
-    sendResponse({ status: "started" });
-  } else if (message.action === "stop") {
-    console.log("Recording stopped (content script).");
-
-    // 1. Detach event listeners
-    detachListeners();
-
-    // 2. Stop observing DOM
-    stopObservingDom();
-
-    // 3. Log what was recorded
-    console.log('Recorded DOM Mutations:', getDomMutations());
-
-    sendResponse({ status: "stopped" });
-  }
-
-  // If you need to respond asynchronously, return true here
-  // return true;
-});
-
-console.log("Content script message listener registered.");
