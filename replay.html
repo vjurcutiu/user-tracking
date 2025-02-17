@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>RRWeb Replay</title>
-    <script src="C:\code\paid\user_tracking\node_modules\rrweb-player\dist\index.js"></script>
+    <script src=".\node_modules\rrweb-player\dist\index.js"></script>
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/rrweb-player@latest/dist/style.css"
@@ -31,15 +31,14 @@
             const events = JSON.parse(e.target.result);
             console.log('Parsed events:', events);
 
-            // Now that we have events, create the rrwebPlayer
             new rrwebPlayer({
               target: document.getElementById('playerRoot'),
               props: {
-                events: events, // guaranteed 2+ events
+                events: events,
                 width: 1024,
                 height: 576,
                 showController: true,
-                autoPlay: true, // can auto-play now since we have real events
+                autoPlay: true,
               },
             });
           } catch (err) {
