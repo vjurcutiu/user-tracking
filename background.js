@@ -1,3 +1,5 @@
+importScripts('pako.min.js');
+
 let recordingTabId = null; 
 let recording = false;
 
@@ -26,23 +28,37 @@ function exportRecording() {
     return;
   }
 
-  const base64 = btoa(unescape(encodeURIComponent(json)));
-  const dataUrl = `data:application/json;base64,${base64}`;
+  try {
+    // Compress the JSON string using pako.gzip
+    const compressed = pako.gzip(json);
+    // Convert the compressed data (Uint8Array) to a binary string
+    let binaryString = '';
+    for (let i = 0; i < compressed.length; i++) {
+      binaryString += String.fromCharCode(compressed[i]);
+    }
+    // Encode the binary string to base64
+    const base64 = btoa(binaryString);
+    // Create a data URL with appropriate MIME type
+    const dataUrl = `data:application/octet-stream;base64,${base64}`;
 
-  chrome.downloads.download({
-    url: dataUrl,
-    filename: `rrweb-recording-${Date.now()}.json`,
-    conflictAction: 'uniquify'
-  }, () => {
-    allEvents = [];
-  });
+    chrome.downloads.download({
+      url: dataUrl,
+      // Use .json.gz to indicate that the file is compressed
+      filename: `rrweb-recording-${Date.now()}.json.gz`,
+      conflictAction: 'uniquify'
+    }, () => {
+      allEvents = [];
+    });
+  } catch (compressionError) {
+    console.error('Compression failed:', compressionError);
+  }
 }
 
 function injectContentScript(tabId, callback) {
   console.log(`Injecting content script into tab ${tabId}...`);
   chrome.scripting.executeScript({
     target: { tabId },
-    files: ['dist/main.js'] // your compiled rrweb content script
+    files: ['dist/main.js'] 
   }, () => {
     if (chrome.runtime.lastError) {
       console.error('Error injecting content script:', chrome.runtime.lastError.message);
