@@ -54,6 +54,42 @@ function exportRecording() {
   }
 }
 
+function exportLiteRecording(tabId) {  
+  chrome.tabs.sendMessage(tabId, { action: "exportLite" }, (response) => {
+    if (chrome.runtime.lastError || !response) {
+      console.error('Error retrieving lite events:', chrome.runtime.lastError ? chrome.runtime.lastError.message : 'No response received');
+      return;
+    }
+
+    console.log("Received lite events from content script:", response.liteEvents);
+
+    let json;
+    try {
+      json = JSON.stringify(response.liteEvents, null, 2);
+    } catch (err) {
+      console.error('Failed to stringify LITE events:', err);
+      return;
+    }
+      
+    try {      
+      // Encode the binary string to base64
+      const base64 = btoa(json);
+      // Create a data URL with appropriate MIME type
+      const dataUrl = `data:application/octet-stream;base64,${base64}`;
+
+      chrome.downloads.download({
+          url: dataUrl,
+          filename: `lite-recording-${Date.now()}.json`,
+          conflictAction: 'uniquify'
+      }, () => {
+          chrome.tabs.sendMessage(tabId, { action: "clearLiteEvents" });
+      });
+    } catch (liteExportError) {
+      console.error('Compression failed:', liteExportError);
+    }
+  });
+}
+
 function injectContentScript(tabId, callback) {
   console.log(`Injecting content script into tab ${tabId}...`);
   chrome.scripting.executeScript({
@@ -123,6 +159,7 @@ chrome.commands.onCommand.addListener((command) => {
             console.log(`Recording stopped on tab ${tabId}`);
           }
           exportRecording();
+          exportLiteRecording(tabId);
         });
       }
     });
