@@ -1,13 +1,38 @@
+console.log("LiteExport content script loaded in top frame?", window.top === window.self);
 (function() {
+    // Only run in top frame
     if (window.top !== window.self) {
-        // We’re in an iframe, so do nothing.
-        return;
+      return;
+    }
+    
+    // -- Ping handler for background verification --
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.action === "ping") {
+        sendResponse({ pong: true });
+        return; // Exit immediately on ping
       }
-    // We'll track whether our event listeners are attached
-    let trackingInitialized = false;
-    let liteEvents = [];
-  
-    // -- Helper Functions --
+      // Existing message handler continues below...
+      try {
+        if (message.action === "start") {
+          initializeTracking();
+          sendResponse({ status: "lite tracking started" });
+        } else if (message.action === "stop") {
+          destroyTracking();
+          sendResponse({ status: "lite tracking stopped" });
+        } else if (message.action === "exportLite") {
+          sendResponse({ status: "export not handled here" });
+        } else if (message.action === "clearLiteEvents") {
+          // Not used in this new pattern.
+        }
+      } catch (err) {
+        console.error("Error in message handler:", err);
+        sendResponse({ error: err.message });
+      }
+    });
+    
+    // -- The rest of your code remains mostly the same --
+    // (Helper functions, event handlers, attachEventListeners, etc.)
+    
     function getElementSelector(el) {
       if (!el || !el.tagName) return null;
       let selector = el.tagName.toLowerCase();
@@ -15,7 +40,7 @@
       if (el.classList.length) selector += `.${[...el.classList].join('.')}`;
       return selector;
     }
-  
+    
     function getElementDetails(el) {
       if (!el || !el.tagName) return {};
       return {
@@ -26,112 +51,137 @@
       };
     }
     
+    // Instead of storing events locally, send each event to the background.
     function logEvent(type, data) {
-      liteEvents.push({ type, timestamp: Date.now(), ...data });
-      // Trigger a screenshot for most events (if desired)
+      const eventRecord = { type, timestamp: Date.now(), ...data };
+      chrome.runtime.sendMessage({ action: "recordLiteEvent", liteEvent: eventRecord });
       if (type !== "mouseMovement") {
         triggerScreenshot(type);
       }
     }
     
-    /**
-     * Sends a message to the background script to take a screenshot.
-     * @param {string} screenshotType - A string describing the event (e.g., "click", "scroll").
-     */
     function triggerScreenshot(screenshotType) {
       chrome.runtime.sendMessage({ action: "takeScreenshot", screenshotType: screenshotType });
     }
-  
-    // -- Event Handlers --
+    
+    // Event handlers (click, contextmenu, mousemove, scroll, resize, input, keydown, URL change)
     function handleClick(event) {
-        try {
-          console.log("Click event fired", {
-            target: event.target,
-            frame: window.top === window.self
-          });
-          const data = {
-            element: getElementDetails(event.target),
-            text: event.target.innerText ? event.target.innerText.slice(0, 50) : null,
-            position: { x: event.clientX, y: event.clientY }
-          };
-          logEvent("click", data);
-        } catch (err) {
-          console.error("Error handling click event:", err);
-        }
+      try {
+        const data = {
+          element: getElementDetails(event.target),
+          text: event.target.innerText ? event.target.innerText.slice(0, 50) : null,
+          position: { x: event.clientX, y: event.clientY }
+        };
+        console.log("Click event fired", data);
+        logEvent("click", data);
+      } catch (err) {
+        console.error("Error in click handler:", err);
       }
+    }
     
     function handleContextMenu(event) {
-      const data = {
-        element: getElementDetails(event.target),
-        position: { x: event.clientX, y: event.clientY }
-      };
-      logEvent("rightClick", data);
+      try {
+        const data = {
+          element: getElementDetails(event.target),
+          position: { x: event.clientX, y: event.clientY }
+        };
+        logEvent("rightClick", data);
+      } catch (err) {
+        console.error("Error in contextmenu handler:", err);
+      }
     }
-        
+    
     let mouseMoveStart = null;
     let mouseMoveTimeout = null;
     function handleMouseMove(event) {
-      if (mouseMoveStart === null) {
-        mouseMoveStart = { x: event.clientX, y: event.clientY };
+      try {
+        if (mouseMoveStart === null) {
+          mouseMoveStart = { x: event.clientX, y: event.clientY };
+        }
+        if (mouseMoveTimeout) clearTimeout(mouseMoveTimeout);
+        mouseMoveTimeout = setTimeout(() => {
+          const mouseMoveEnd = { x: event.clientX, y: event.clientY };
+          logEvent("mouseMovement", { start: mouseMoveStart, end: mouseMoveEnd });
+          mouseMoveStart = null;
+          mouseMoveTimeout = null;
+        }, 250);
+      } catch (err) {
+        console.error("Error in mousemove handler:", err);
       }
-      if (mouseMoveTimeout) clearTimeout(mouseMoveTimeout);
-      mouseMoveTimeout = setTimeout(() => {
-        const mouseMoveEnd = { x: event.clientX, y: event.clientY };
-        logEvent("mouseMovement", { start: mouseMoveStart, end: mouseMoveEnd });
-        mouseMoveStart = null;
-        mouseMoveTimeout = null;
-      }, 250);
     }
     
     let scrollTimeout = null;
     let scrollStart = null;
     function handleScroll() {
-      if (scrollStart === null) {
-        scrollStart = { scrollX: window.scrollX, scrollY: window.scrollY };
+      try {
+        if (scrollStart === null) {
+          scrollStart = { scrollX: window.scrollX, scrollY: window.scrollY };
+        }
+        if (scrollTimeout) clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(() => {
+          let scrollEnd = { scrollX: window.scrollX, scrollY: window.scrollY };
+          logEvent("scrollMovement", { start: scrollStart, end: scrollEnd });
+          scrollStart = null;
+        }, 250);
+      } catch (err) {
+        console.error("Error in scroll handler:", err);
       }
-      if (scrollTimeout) clearTimeout(scrollTimeout);
-      scrollTimeout = setTimeout(() => {
-        let scrollEnd = { scrollX: window.scrollX, scrollY: window.scrollY };
-        logEvent("scrollMovement", { start: scrollStart, end: scrollEnd });
-        scrollStart = null;
-      }, 250);
     }
     
     let resizeTimeout = null;
     let resizeStart = null;
     function handleResize() {
-      if (resizeStart === null) {
-        resizeStart = { width: window.innerWidth, height: window.innerHeight };
+      try {
+        if (resizeStart === null) {
+          resizeStart = { width: window.innerWidth, height: window.innerHeight };
+        }
+        if (resizeTimeout) clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+          let resizeEnd = { width: window.innerWidth, height: window.innerHeight };
+          logEvent("windowResize", { start: resizeStart, end: resizeEnd });
+          resizeStart = null;
+        }, 250);
+      } catch (err) {
+        console.error("Error in resize handler:", err);
       }
-      if (resizeTimeout) clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => {
-        let resizeEnd = { width: window.innerWidth, height: window.innerHeight };
-        logEvent("windowResize", { start: resizeStart, end: resizeEnd });
-        resizeStart = null;
-      }, 250);
     }
     
     function handleInput(event) {
-      const target = event.target;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) {
-        logEvent("input", {
-          element: getElementDetails(target),
-          value: target.type === "password" ? "****" : target.value.slice(0, 100)
-        });
+      try {
+        const target = event.target;
+        if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) {
+          logEvent("input", {
+            element: getElementDetails(target),
+            value: target.type === "password" ? "****" : target.value.slice(0, 100)
+          });
+        }
+      } catch (err) {
+        console.error("Error in input handler:", err);
       }
     }
     
     function handleKeydown(event) {
-      logEvent("keypress", {
-        key: event.key,
-        keyCode: event.keyCode,
-        ctrl: event.ctrlKey,
-        shift: event.shiftKey,
-        alt: event.altKey
-      });
+      try {
+        logEvent("keypress", {
+          key: event.key,
+          keyCode: event.keyCode,
+          ctrl: event.ctrlKey,
+          shift: event.shiftKey,
+          alt: event.altKey
+        });
+      } catch (err) {
+        console.error("Error in keydown handler:", err);
+      }
     }
     
-    // -- Attach/Remove Listeners --
+    function handleUrlChange() {
+      try {
+        logEvent("urlChange", { url: window.location.href });
+      } catch (err) {
+        console.error("Error in URL change handler:", err);
+      }
+    }
+    
     function attachEventListeners() {
       document.addEventListener("click", handleClick, true);
       document.addEventListener("contextmenu", handleContextMenu);
@@ -140,18 +190,13 @@
       window.addEventListener("resize", handleResize);
       document.addEventListener("input", handleInput);
       document.addEventListener("keydown", handleKeydown);
-      // Record initial URL
       logEvent("urlInit", { url: window.location.href });
       window.addEventListener("popstate", handleUrlChange);
       window.addEventListener("hashchange", handleUrlChange);
     }
     
-    function handleUrlChange() {
-      logEvent("urlChange", { url: window.location.href });
-    }
-    
     function removeEventListeners() {
-      document.removeEventListener("click", handleClick);
+      document.removeEventListener("click", handleClick, true);
       document.removeEventListener("contextmenu", handleContextMenu);
       document.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("scroll", handleScroll);
@@ -162,7 +207,7 @@
       window.removeEventListener("hashchange", handleUrlChange);
     }
     
-    // -- Public Methods --
+    let trackingInitialized = false;
     function initializeTracking() {
       if (trackingInitialized) return;
       attachEventListeners();
@@ -177,26 +222,9 @@
       console.log("LiteExport tracking destroyed.");
     }
     
-    // -- Message Handler --
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.action === "ping") {
-          sendResponse({ pong: true });
-          return; // Stop processing further actions for the ping.
-        }
-        // Existing message handler code follows...
-        if (message.action === "start") {
-          initializeTracking();
-          sendResponse({ status: "lite tracking started" });
-        } else if (message.action === "stop") {
-          destroyTracking();
-          sendResponse({ status: "lite tracking stopped" });
-        } else if (message.action === "exportLite") {
-          sendResponse({ liteEvents });
-        } else if (message.action === "clearLiteEvents") {
-          liteEvents = [];
-        }
-      });
-    
     console.log("LiteExport module loaded (conditional initialization enabled).");
+    
+    // Signal that the content script is ready.
+    chrome.runtime.sendMessage({ action: "contentScriptReady" });
   })();
   
