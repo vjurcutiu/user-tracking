@@ -2,10 +2,11 @@
   "manifest_version": 3,
   "name": "Interaction Recorder",
   "version": "1.0",
-  "permissions": ["activeTab", "scripting", "storage", "notifications", "downloads"],
+  "permissions": ["activeTab", "scripting", "storage", "notifications", "downloads", "tabs"],
   "host_permissions": ["<all_urls>"],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "dist/background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
@@ -26,8 +27,10 @@
       "description": "Toggle recording of user interactions"
     }
   },
-  "web_accessible_resources": [{
-    "resources": ["dist/main.js"],
-    "matches": ["<all_urls>"]
-  }]
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/main.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

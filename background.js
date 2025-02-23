@@ -1,4 +1,6 @@
-importScripts('pako.min.js');
+import pako from 'pako';
+import JSZip from 'jszip';
+import { blobToDataUrl, downloadDataUrl } from './src/downloadHelper.js';
 
 let recordingTabId = null; 
 let recording = false;
@@ -45,6 +47,7 @@ function exportRecording() {
       url: dataUrl,
       // Use .json.gz to indicate that the file is compressed
       filename: `rrweb-recording-${Date.now()}.json.gz`,
+      saveAs: false,
       conflictAction: 'uniquify'
     }, () => {
       allEvents = [];
@@ -79,6 +82,7 @@ function exportLiteRecording(tabId) {
 
       chrome.downloads.download({
           url: dataUrl,
+          saveAs: false,
           filename: `lite-recording-${Date.now()}.json`,
           conflictAction: 'uniquify'
       }, () => {
@@ -105,7 +109,6 @@ function injectContentScript(tabId, callback) {
   });
 }
 
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'contentScriptReady') {
     console.log(`Content script ready on tab ${sender.tab?.id}`);
@@ -116,6 +119,63 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     allEvents.push(message.rrwebEvent);
   }
 });
+
+// Make sure JSZip is included in your extension (e.g., as a local file in your manifest)
+let screenshotQueue = [];
+let screenshotCounter = 0;
+
+// Listener for screenshot messages
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "takeScreenshot") {
+    chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+      if (chrome.runtime.lastError) {
+        console.error("Screenshot capture failed:", chrome.runtime.lastError.message);
+        return;
+      }
+      screenshotCounter++;
+      const timestamp = Date.now();
+      const filename = `${screenshotCounter}.SS-${timestamp}.png`;
+      // Store both the filename and the dataUrl
+      screenshotQueue.push({ filename, dataUrl });
+      console.log("Screenshot queued:", filename);
+    });
+  }
+});
+
+// Call this function when the recording session ends
+function archiveScreenshots() {
+  const zip = new JSZip();
+  screenshotQueue.forEach(item => {
+    // Remove the "data:image/png;base64," prefix so that JSZip can interpret the remaining data as base64
+    const base64Data = item.dataUrl.split(',')[1];
+    zip.file(item.filename, base64Data, { base64: true });
+  });
+  
+  zip.generateAsync({ type: "blob" })
+    .then((blob) => {
+      return blobToDataUrl(blob);
+    })
+    .then((dataUrl) => {
+      chrome.downloads.download({
+        url: dataUrl,
+        filename: "screenshots.zip",
+        saveAs: true, // Set to false if you want to bypass the prompt
+        conflictAction: 'uniquify'
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error("Download failed:", chrome.runtime.lastError.message);
+        } else {
+          console.log("Archive downloaded successfully.");
+        }
+        // Optionally clear the queue after download
+        screenshotQueue = [];
+        screenshotCounter = 0;
+      });
+    })
+    .catch((err) => {
+      console.error("Error creating archive:", err);
+    });
+}
 
 chrome.commands.onCommand.addListener((command) => {
   if (command !== 'toggle-recording') return;
@@ -160,11 +220,14 @@ chrome.commands.onCommand.addListener((command) => {
           }
           exportRecording();
           exportLiteRecording(tabId);
+          archiveScreenshots()
         });
       }
     });
   });
 });
+
+
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (tabId !== recordingTabId) return;
