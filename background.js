@@ -9,12 +9,18 @@ let recording = false;
 let allEvents = [];
 
 function showNotification(title, message) {
-  if (!chrome.notifications) return;
-  chrome.notifications.create('', {
+  const iconUrl = chrome.runtime.getURL('icon.png'); // use an absolute URL
+  chrome.notifications.create('notification-' + Date.now(), {
     type: 'basic',
-    iconUrl: 'icon.png',
-    title,
-    message
+    iconUrl: iconUrl,
+    title: title,
+    message: message
+  }, (notificationId) => {
+    if (chrome.runtime.lastError) {
+      console.error("Notification error:", chrome.runtime.lastError.message);
+    } else {
+      console.log("Notification created with id:", notificationId);
+    }
   });
 }
 
@@ -134,7 +140,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       screenshotCounter++;
       const timestamp = Date.now();
-      const filename = `${screenshotCounter}.SS-${timestamp}.png`;
+      // Get the screenshot type from the message, defaulting to "unknown" if not provided.
+      const screenshotType = message.screenshotType || "unknown";
+      const filename = `${screenshotCounter}.SS-${timestamp}-${screenshotType}.png`;
       // Store both the filename and the dataUrl
       screenshotQueue.push({ filename, dataUrl });
       console.log("Screenshot queued:", filename);
@@ -177,6 +185,28 @@ function archiveScreenshots() {
     });
 }
 
+function ensureContentScript(tabId, callback) {
+  chrome.tabs.sendMessage(tabId, { action: "ping" }, (response) => {
+    if (chrome.runtime.lastError || !response) {
+      // No response means the content script isn't present, so inject it.
+      console.log(`Content script not found in tab ${tabId}, injecting...`);
+      chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['dist/main.js']
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Error injecting content script:', chrome.runtime.lastError.message);
+        }
+        // Give it a moment to load, then call the callback.
+        setTimeout(callback, 500);
+      });
+    } else {
+      // Content script is already present.
+      callback();
+    }
+  });
+}
+
 chrome.commands.onCommand.addListener((command) => {
   if (command !== 'toggle-recording') return;
 
@@ -200,10 +230,10 @@ chrome.commands.onCommand.addListener((command) => {
       const tabId = tabs[0].id;
       recordingTabId = nowRecording ? tabId : null;
 
-      const action = nowRecording ? 'start' : 'stop';
       if (nowRecording) {
-        injectContentScript(tabId, () => {
-          chrome.tabs.sendMessage(tabId, { action }, (resp) => {
+        // Ensure content script is present then send "start" message.
+        ensureContentScript(tabId, () => {
+          chrome.tabs.sendMessage(tabId, { action: 'start' }, (resp) => {
             if (chrome.runtime.lastError) {
               console.error('Error sending start to content script:', chrome.runtime.lastError.message);
             } else {
@@ -212,20 +242,24 @@ chrome.commands.onCommand.addListener((command) => {
           });
         });
       } else {
-        chrome.tabs.sendMessage(tabId, { action }, (resp) => {
-          if (chrome.runtime.lastError) {
-            console.error('Error sending stop to content script:', chrome.runtime.lastError.message);
-          } else {
-            console.log(`Recording stopped on tab ${tabId}`);
-          }
-          exportRecording();
-          exportLiteRecording(tabId);
-          archiveScreenshots()
+        // Ensure content script is present then send "stop" message.
+        ensureContentScript(tabId, () => {
+          chrome.tabs.sendMessage(tabId, { action: 'stop' }, (resp) => {
+            if (chrome.runtime.lastError) {
+              console.error('Error sending stop to content script:', chrome.runtime.lastError.message);
+            } else {
+              console.log(`Recording stopped on tab ${tabId}`);
+            }
+            exportRecording();
+            exportLiteRecording(tabId);
+            archiveScreenshots();
+          });
         });
       }
     });
   });
 });
+
 
 
 
