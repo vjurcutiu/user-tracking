@@ -1,5 +1,5 @@
 import { record } from 'rrweb';
-import './liteExport.js';  // liteExport.js also listens for messages
+import './liteExport/main.js';  // liteExport.js also listens for messages
 
 let isRecording = false;
 let stopFn = null;

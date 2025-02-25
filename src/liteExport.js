@@ -1,11 +1,15 @@
 console.log("LiteExport content script loaded in top frame?", window.top === window.self);
+
 (function() {
   // Only run in top frame
   if (window.top !== window.self) {
     return;
   }
-  
-  // -- Ping handler for background verification --
+
+  ////////////////////////////////////////////////////////////////
+  // 1. Communication Module
+  // - Handles incoming Chrome runtime messages and delegates actions.
+  ////////////////////////////////////////////////////////////////
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "ping") {
       sendResponse({ pong: true });
@@ -29,40 +33,11 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       sendResponse({ error: err.message });
     }
   });
-  
-  // Capture interactable elements on the page
-  function captureInteractableElements() {
-    const selector = [
-      'a',
-      'button',
-      'input',
-      'select',
-      'textarea',
-      '[role="button"]'
-    ].join(',');
-    
-    const elements = Array.from(document.querySelectorAll(selector));
-    
-    const interactableData = elements.map(el => {
-      return {
-        tag: el.tagName.toLowerCase(),
-        id: el.id || null,
-        classes: el.classList ? Array.from(el.classList) : [],
-        xpath: getXPath(el)
-      };
-    });
-    
-    chrome.runtime.sendMessage({
-      action: 'recordInteractableElements',
-      elements: interactableData
-    }, (resp) => {
-      if (chrome.runtime.lastError) {
-        console.warn('Failed to send interactable elements:', chrome.runtime.lastError.message);
-      }
-    });
-  }
-  
-  // Minimal utility to calculate an absolute XPath for a given DOM node
+
+  ////////////////////////////////////////////////////////////////
+  // 2. DOM Utility Module
+  // - Contains helper functions for DOM element selection and XPath generation.
+  ////////////////////////////////////////////////////////////////
   function getXPath(element) {
     if (!element || element.nodeType !== Node.ELEMENT_NODE) {
       return '';
@@ -72,7 +47,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
     }
     return getElementTreeXPath(element);
   }
-  
+
   function getElementTreeXPath(element) {
     const paths = [];
     for (; element && element.nodeType === Node.ELEMENT_NODE; element = element.parentNode) {
@@ -96,7 +71,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
     }
     return paths.length ? '/' + paths.join('/') : null;
   }
-  
+
   function getElementSelector(el) {
     if (!el || !el.tagName) return null;
     let selector = el.tagName.toLowerCase();
@@ -104,7 +79,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
     if (el.classList.length) selector += `.${[...el.classList].join('.')}`;
     return selector;
   }
-  
+
   function getElementDetails(el) {
     if (!el || !el.tagName) return {};
     return {
@@ -114,30 +89,66 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       selector: getElementSelector(el)
     };
   }
-  
-  // Log an event and trigger screenshots only on specific events.
+
+  // Function to capture interactable elements on the page
+  function captureInteractableElements() {
+    const selector = [
+      'a',
+      'button',
+      'input',
+      'select',
+      'textarea',
+      '[role="button"]'
+    ].join(',');
+
+    const elements = Array.from(document.querySelectorAll(selector));
+    const interactableData = elements.map(el => {
+      return {
+        tag: el.tagName.toLowerCase(),
+        id: el.id || null,
+        classes: el.classList ? Array.from(el.classList) : [],
+        xpath: getXPath(el)
+      };
+    });
+
+    chrome.runtime.sendMessage({
+      action: 'recordInteractableElements',
+      elements: interactableData
+    }, (resp) => {
+      if (chrome.runtime.lastError) {
+        console.warn('Failed to send interactable elements:', chrome.runtime.lastError.message);
+      }
+    });
+  }
+
+  ////////////////////////////////////////////////////////////////
+  // 3. Event Handling & Logging Module
+  // - Contains event handlers and logging functionality.
+  ////////////////////////////////////////////////////////////////
+  let userInteracted = false;
+  function markUserInteraction() {
+    userInteracted = true;
+    // Reset the flag after a short period (e.g., 500ms) so that later mutations aren’t mistakenly captured.
+    setTimeout(() => { userInteracted = false; }, 500);
+  }
+
+  // Logs events and triggers screenshots for specific event types
   function logEvent(type, data) {
     const eventRecord = { type, timestamp: Date.now(), ...data };
     chrome.runtime.sendMessage({ action: "recordLiteEvent", liteEvent: eventRecord });
-    
-    // Only trigger screenshots for the following event types:
-    if (type === "pageLoad") {
-      triggerScreenshot(type);
-    } else if (type === "scrollMovement") {
-      triggerScreenshot(type);
-    } else if (type === "domMutation") {
+
+    if (type === "pageLoad" || type === "scrollMovement" || type === "domMutation") {
       triggerScreenshot(type);
     }
   }
-  
+
   function triggerScreenshot(screenshotType) {
     chrome.runtime.sendMessage({ action: "takeScreenshot", screenshotType: screenshotType });
   }
-  
+
   function handleClick(event) {
-    markUserInteraction
     try {
-      markUserInteraction
+      markUserInteraction();
       const data = {
         element: getElementDetails(event.target),
         text: event.target.innerText ? event.target.innerText.slice(0, 50) : null,
@@ -149,10 +160,10 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       console.error("Error in click handler:", err);
     }
   }
-  
+
   function handleContextMenu(event) {
-    markUserInteraction
     try {
+      markUserInteraction();
       const data = {
         element: getElementDetails(event.target),
         position: { x: event.clientX, y: event.clientY }
@@ -162,7 +173,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       console.error("Error in contextmenu handler:", err);
     }
   }
-  
+
   let mouseMoveStart = null;
   let mouseMoveTimeout = null;
   function handleMouseMove(event) {
@@ -181,7 +192,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       console.error("Error in mousemove handler:", err);
     }
   }
-  
+
   let scrollTimeout = null;
   let scrollStart = null;
   function handleScroll() {
@@ -191,7 +202,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       }
       if (scrollTimeout) clearTimeout(scrollTimeout);
       scrollTimeout = setTimeout(() => {
-        let scrollEnd = { scrollX: window.scrollX, scrollY: window.scrollY };
+        const scrollEnd = { scrollX: window.scrollX, scrollY: window.scrollY };
         logEvent("scrollMovement", { start: scrollStart, end: scrollEnd });
         scrollStart = null;
       }, 250);
@@ -199,7 +210,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       console.error("Error in scroll handler:", err);
     }
   }
-  
+
   let resizeTimeout = null;
   let resizeStart = null;
   function handleResize() {
@@ -209,7 +220,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       }
       if (resizeTimeout) clearTimeout(resizeTimeout);
       resizeTimeout = setTimeout(() => {
-        let resizeEnd = { width: window.innerWidth, height: window.innerHeight };
+        const resizeEnd = { width: window.innerWidth, height: window.innerHeight };
         logEvent("windowResize", { start: resizeStart, end: resizeEnd });
         resizeStart = null;
       }, 250);
@@ -217,10 +228,10 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       console.error("Error in resize handler:", err);
     }
   }
-  
+
   function handleInput(event) {
-    markUserInteraction
     try {
+      markUserInteraction();
       const target = event.target;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) {
         logEvent("input", {
@@ -232,10 +243,10 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       console.error("Error in input handler:", err);
     }
   }
-  
+
   function handleKeydown(event) {
-    markUserInteraction
     try {
+      markUserInteraction();
       logEvent("keypress", {
         key: event.key,
         keyCode: event.keyCode,
@@ -247,7 +258,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       console.error("Error in keydown handler:", err);
     }
   }
-  
+
   function handleUrlChange() {
     try {
       logEvent("urlChange", { url: window.location.href });
@@ -257,8 +268,8 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
   }
 
   function handleFormSubmit(event) {
-    markUserInteraction();
     try {
+      markUserInteraction();
       const data = {
         element: getElementDetails(event.target)
         // Optionally, you could capture additional form data here if needed.
@@ -270,7 +281,11 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
       console.error("Error in form submit handler:", err);
     }
   }
-  
+
+  ////////////////////////////////////////////////////////////////
+  // 4. Mutation Observer & DOM Monitoring Module
+  // - Observes and debounces DOM changes to log dynamic content or mutations.
+  ////////////////////////////////////////////////////////////////
   function isElementInViewport(el) {
     const rect = el.getBoundingClientRect();
     return (
@@ -289,19 +304,10 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
            style.display !== 'none';
   }
 
-  let userInteracted = false;
-
-  function markUserInteraction() {
-    userInteracted = true;
-    // Reset the flag after a short period (e.g., 500ms) so that later mutations aren’t mistakenly captured.
-    setTimeout(() => { userInteracted = false; }, 500);
-  }  
-
   function observeDynamicContent() {
     let dynamicContentTimeout = null;
     const dynamicContentObserver = new MutationObserver((mutationList) => {
       let newVisibleContent = false;
-      // Check added nodes for visibility
       for (const mutation of mutationList) {
         if (mutation.type === "childList" && mutation.addedNodes.length) {
           mutation.addedNodes.forEach((node) => {
@@ -315,33 +321,25 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
         if (newVisibleContent) break;
       }
       if (newVisibleContent) {
-        // Use a debounce to wait for multiple rapid changes to settle
         if (dynamicContentTimeout) clearTimeout(dynamicContentTimeout);
         dynamicContentTimeout = setTimeout(() => {
-          // Log a dynamic content load event and trigger a screenshot
           logEvent("dynamicContentLoad", { mutationCount: mutationList.length });
           triggerScreenshot("dynamicContentLoad");
         }, 500);
       }
     });
-    
-    // Observe the whole document for childList changes (and optionally attribute changes if needed)
+
     dynamicContentObserver.observe(document.documentElement, {
       childList: true,
       subtree: true,
     });
-    
     return dynamicContentObserver;
   }
 
   function observeDomMutations() {
     const observer = new MutationObserver((mutationList) => {
-      // Only proceed if there was a recent user interaction.
       if (!userInteracted) return;
-  
       let visibleChange = false;
-  
-      // Check each mutation for visible changes in the viewport.
       for (const mutation of mutationList) {
         if (mutation.type === "childList") {
           mutation.addedNodes.forEach((node) => {
@@ -360,25 +358,48 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
         }
         if (visibleChange) break;
       }
-  
-      // Only trigger the screenshot if a visible change occurred.
       if (visibleChange) {
-        // Use requestAnimationFrame to let the UI settle before capturing.
         requestAnimationFrame(() => {
           logEvent("domMutation", { mutationCount: mutationList.length });
         });
-        // Reset the flag after capturing.
         userInteracted = false;
       }
     });
-    
+
     observer.observe(document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
     });
   }
-  
+
+  // Wait for the DOM to be stable after window load before executing a callback.
+  function waitForStableDOM(callback, debounceTime = 100) {
+    let timer;
+    const observer = new MutationObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        observer.disconnect();
+        callback();
+      }, debounceTime);
+    });
+
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+
+    timer = setTimeout(() => {
+      observer.disconnect();
+      callback();
+    }, debounceTime);
+  }
+
+  ////////////////////////////////////////////////////////////////
+  // 5. Event Listener Management & Initialization Module
+  // - Attaches and removes event listeners and manages the overall tracking lifecycle.
+  ////////////////////////////////////////////////////////////////
   function attachEventListeners() {
     document.addEventListener("click", handleClick, true);
     document.addEventListener("contextmenu", handleContextMenu);
@@ -391,17 +412,11 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
     window.addEventListener("hashchange", handleUrlChange);
     document.addEventListener("submit", handleFormSubmit, true);
 
-
-    // Start observing DOM mutations
+    // Start observing DOM mutations and dynamic content.
     observeDomMutations();
-
     observeDynamicContent();
-
-    
-    // Optionally, you can remove the immediate urlInit if not needed:
-    // logEvent("urlInit", { url: window.location.href });
   }
-  
+
   function removeEventListeners() {
     document.removeEventListener("click", handleClick, true);
     document.removeEventListener("contextmenu", handleContextMenu);
@@ -414,7 +429,7 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
     window.removeEventListener("hashchange", handleUrlChange);
     document.removeEventListener("submit", handleFormSubmit, true);
   }
-  
+
   let trackingInitialized = false;
   function initializeTracking() {
     if (trackingInitialized) return;
@@ -422,47 +437,26 @@ console.log("LiteExport content script loaded in top frame?", window.top === win
     trackingInitialized = true;
     console.log("LiteExport tracking initialized.");
   }
-  
+
   function destroyTracking() {
     if (!trackingInitialized) return;
     removeEventListeners();
     trackingInitialized = false;
     console.log("LiteExport tracking destroyed.");
   }
-  
-  // Wait for the DOM to be stable after the window load event
-  function waitForStableDOM(callback, debounceTime = 100) {
-    let timer;
-    const observer = new MutationObserver(() => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        observer.disconnect();
-        callback();
-      }, debounceTime);
-    });
-  
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-    });
-  
-    // In case there are no mutations at all, trigger callback after debounceTime.
-    timer = setTimeout(() => {
-      observer.disconnect();
-      callback();
-    }, debounceTime);
-  }
-  
-  // Listen for the window load, then wait for the DOM to settle before logging "pageLoad"
+
+  ////////////////////////////////////////////////////////////////
+  // Additional Initialization
+  // - Wait for the DOM to stabilize and log the page load event.
+  ////////////////////////////////////////////////////////////////
   window.addEventListener("load", () => {
     waitForStableDOM(() => {
       logEvent("pageLoad", { url: window.location.href });
     });
   });
-  
+
   console.log("LiteExport module loaded (conditional initialization enabled).");
-  
+
   // Signal that the content script is ready.
   chrome.runtime.sendMessage({ action: "contentScriptReady" });
 })();
