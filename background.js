@@ -1,12 +1,13 @@
 import pako from 'pako';
 import JSZip from 'jszip';
-import { blobToDataUrl, downloadDataUrl } from './src/downloadHelper.js';
+import { blobToDataUrl, downloadDataUrl, exportGenericData } from './src/utils.js';
 
 let recordingTabId = null; 
 let recording = false;
 
 let allEvents = []; // rrweb events
 let liteEventsGlobal = []; // Global lite events
+let interactableElementsGlobal = [];
 let screenshotQueue = [];
 let screenshotCounter = 0;
 
@@ -27,63 +28,39 @@ function showNotification(title, message) {
 }
 
 function exportRecording() {
-  // (rrweb export code unchanged)
   console.log('Exporting rrweb events:', allEvents);
-  let json;
-  try {
-    json = JSON.stringify(allEvents, null, 2);
-  } catch (err) {
-    console.error('Failed to stringify rrweb events:', err);
-    return;
-  }
-  try {
-    const compressed = pako.gzip(json);
-    let binaryString = '';
-    for (let i = 0; i < compressed.length; i++) {
-      binaryString += String.fromCharCode(compressed[i]);
-    }
-    const base64 = btoa(binaryString);
-    const dataUrl = `data:application/octet-stream;base64,${base64}`;
-    chrome.downloads.download({
-      url: dataUrl,
-      filename: `rrweb-recording-${Date.now()}.json.gz`,
-      saveAs: false,
-      conflictAction: 'uniquify'
-    }, () => {
-      // Do not clear allEvents to preserve data if desired.
-      console.log("rrweb export complete.");
-    });
-  } catch (compressionError) {
-    console.error('Compression failed:', compressionError);
-  }
+  exportGenericData({
+    exportType: 'rrweb',
+    events: allEvents,
+    filenamePrefix: 'rrweb-recording-',
+    compress: true // Gzip for rrweb
+  });
 }
 
-function exportLiteRecording(tabId) {  
+function exportLiteRecording() {
   console.log("Exporting lite events:", liteEventsGlobal);
-  let json;
-  try {
-    json = JSON.stringify(liteEventsGlobal, null, 2);
-  } catch (err) {
-    console.error('Failed to stringify lite events:', err);
-    return;
-  }
-  try {      
-    const base64 = btoa(json);
-    const dataUrl = `data:application/octet-stream;base64,${base64}`;
+  exportGenericData({
+    exportType: 'lite',
+    events: liteEventsGlobal,
+    filenamePrefix: 'lite-recording-',
+    compress: false // Usually no compression for small data
+  });
 
-    chrome.downloads.download({
-      url: dataUrl,
-      saveAs: false,
-      filename: `lite-recording-${Date.now()}.json`,
-      conflictAction: 'uniquify'
-    }, () => {
-      console.log("Lite events export complete.");
-      // Clear the global lite events so each session starts fresh.
-      liteEventsGlobal = [];
-    });
-  } catch (liteExportError) {
-    console.error('Export of lite events failed:', liteExportError);
-  }
+  // Optionally clear liteEvents after export
+  liteEventsGlobal = [];
+}
+
+function exportInteractableElements() {
+  console.log("Exporting interactable elements:", interactableElementsGlobal);
+  exportGenericData({
+    exportType: 'interactableElements',
+    events: interactableElementsGlobal,
+    filenamePrefix: 'interactable-elements-',
+    compress: false  // Usually not necessary to gzip small data
+  });
+
+  // If you prefer to clear them after export:
+  interactableElementsGlobal = [];
 }
 
 function archiveScreenshots() {
@@ -146,6 +123,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.liteEvent) {
         liteEventsGlobal.push(message.liteEvent);
       }
+    } else if (message.action === "recordInteractableElements") {
+      if (Array.isArray(message.elements)) {
+        interactableElementsGlobal = message.elements;
+        console.log("Interactable elements stored:", interactableElementsGlobal);
+      }     
     } else if (message.action === "takeScreenshot") {
       chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
         try {
@@ -206,9 +188,10 @@ chrome.commands.onCommand.addListener((command) => {
               console.error('Error sending stop to content script:', chrome.runtime.lastError.message);
             } else {
               console.log(`Recording stopped on tab ${tabId}`);
-            }
-            exportRecording();
-            exportLiteRecording(tabId);
+            }            
+            exportRecording();       
+            exportLiteRecording();
+            exportInteractableElements();
             archiveScreenshots();
           });
         });
