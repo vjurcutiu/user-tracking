@@ -51,16 +51,36 @@ export function getXPath(element) {
     };
   }
   
+  function b64EncodeUnicode(str) {
+    return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, p1) =>
+      String.fromCharCode('0x' + p1)
+    ));
+  }
+  
+  function isLatin1(str) {
+    for (let i = 0; i < str.length; i++) {
+      if (str.charCodeAt(i) > 255) return false;
+    }
+    return true;
+  }
+  
   export function captureInteractableElements() {
     const selector = ['a', 'button', 'input', 'select', 'textarea', '[role="button"]'].join(',');
     const elements = Array.from(document.querySelectorAll(selector));
-    const interactableData = elements.map(el => ({
-      tag: el.tagName.toLowerCase(),
-      id: el.id || null,
-      classes: el.classList ? Array.from(el.classList) : [],
-      xpath: getXPath(el)
-    }));
-    
+    const interactableData = elements.map(el => {
+      // Use textContent instead of innerText
+      const text = el.textContent ? el.textContent.trim() : '';
+      const safeText = text && !isLatin1(text) ? b64EncodeUnicode(text) : text;
+      
+      return {
+        tag: el.tagName.toLowerCase(),
+        id: el.id || null,
+        classes: el.classList ? Array.from(el.classList) : [],
+        xpath: getXPath(el),
+        textContent: safeText
+      };
+    });
+  
     chrome.runtime.sendMessage({
       action: 'recordInteractableElements',
       elements: interactableData
@@ -70,4 +90,5 @@ export function getXPath(element) {
       }
     });
   }
+  
   
